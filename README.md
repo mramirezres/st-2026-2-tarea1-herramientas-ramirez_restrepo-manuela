@@ -1,0 +1,2 @@
+# st-2026-2-tarea1-herramientas-ramirez_restrepo-manuela
+tarea series
