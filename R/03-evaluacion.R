@@ -49,7 +49,7 @@ durbin_watson <- function(e) {
 
 # Verificación
 
-verificar_ljung_box <- function(serie, m, p) {
+verificar_ljung_box <- function(serie, m, p = 0) {
   serie <- serie[!is.na(serie)]
   n <- length(serie)
   
@@ -59,7 +59,11 @@ verificar_ljung_box <- function(serie, m, p) {
   dif_Q <- abs(propia$estadistico - unname(de_r$statistic))
   dif_p <- abs(propia$valor_p - de_r$p.value)
   
-  return(dif_Q, dif_p)
+  cat("Ljung-Box (m =", m, ", p =", p, ")\n",
+      "  Q propio:", format(propia$estadistico, digits = 10),
+      "| Q de R:", format(unname(de_r$statistic), digits = 10), "\n")
+  
+  invisible(max(dif_Q, dif_p))
   
 }
 
