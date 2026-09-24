@@ -173,6 +173,52 @@ ajustar_dmm <- function(y, k) {
                          pendiente_final = pendiente_final))
 }
 
+# Holt lineal
+
+ajustar_holt <- function(y, alpha, beta) {
+  validar_serie(y)
+  stopifnot("alpha debe ser un numero en el intervalo (0, 1)" = es_constante(alpha),
+            "beta debe ser un numero en el intervalo (0, 1)" = es_constante(beta))
+  
+  n <- length(y)
+  
+  nivel <- numeric(n)
+  tendencia <- numeric(n)
+  nivel[1] <- y[1]
+  tendencia[1] <- 0
+  
+  yhat <- rep(NA_real_, n)
+  yhat[2] <- nivel[1] + tendencia[1]
+  
+  for (t in 2:n) {
+    nivel[t] <- alpha * y[t] + (1 - alpha) * yhat[t]
+    tendencia[t] <- beta * (nivel[t] - nivel[t - 1]) + (1 - beta) * tendencia[t - 1]
+    
+    if (t < n) {
+      yhat[t + 1] <- nivel[t] + tendencia[t]
+    }
+    
+  }
+  
+  nivel_final <- nivel[n]
+  tendencia_final <- tendencia[n]
+  
+  pronosticar <- function(h) {
+    stopifnot("h debe ser un entero positivo" =
+                is.numeric(h) && length(h) == 1 && h == round(h) && h >= 1)
+    nivel_final + tendencia_final * (1:h)
+    
+  }
+  
+  list(yhat = yhat,
+       pronosticar = pronosticar,
+       parametros = list(alpha = alpha, beta = beta,
+                         nivel = nivel, tendencia = tendencia,
+                         nivel_final = nivel_final,
+                         tendencia_final = tendencia_final))
+  
+}
+
 # Tendencia
 
 ajustar_tendencia <- function(y, tipo, corregir_sesgo = F) {
