@@ -89,6 +89,8 @@ mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
 
+verificar_ljung_box(y, m)
+
 ### Partición
 
 h <- min(12, floor(0.2 * n))
@@ -190,6 +192,8 @@ lb_serie <- ljung_box(r, n, m, 0)
 mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
 
 ### Partición
 
@@ -299,6 +303,8 @@ lb_serie <- ljung_box(r, n, m, 0)
 mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
 
 ### Partición 
 
@@ -412,6 +418,8 @@ mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
 
+verificar_ljung_box(y, m)
+
 ## Particion
 
 h <- min(12, floor(0.2 * n))
@@ -519,11 +527,11 @@ print(contraste[contraste$fuera_de_banda, ], row.names = FALSE)
 
 lb_serie <- ljung_box(r, n, m, 0)
 
-lb_serie <- ljung_box(r, n, m, 0)
-
 mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
 
 ## Particion
 
@@ -643,6 +651,8 @@ mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
 
+verificar_ljung_box(y, m)
+
 ## Particion
 
 h <- min(12, floor(0.2 * n))
@@ -760,6 +770,9 @@ lb_serie <- ljung_box(r, n, m, 0)
 mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+
 ## Particion
 
 h <- min(12, floor(0.2 * n))
@@ -878,6 +891,8 @@ mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
 
+verificar_ljung_box(y, m)
+
 ## Particion
 
 h <- min(12, floor(0.2 * n))
@@ -986,6 +1001,8 @@ lb_serie <- ljung_box(r, n, m, 0)
 mostrar_prueba("Ljung-Box sobre la serie (p = 0)",
                "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
                paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
 
 # Particiones
 
