@@ -172,3 +172,103 @@ ajustar_dmm <- function(y, k) {
                          nivel_final = nivel_final,
                          pendiente_final = pendiente_final))
 }
+
+# Tendencia
+
+ajustar_tendencia <- function(y, tipo, corregir_sesgo = F) {
+  validar_serie(y)
+  n <- length(y)
+  p <- if (tipo == "cuadratica") 3 else 2
+  
+  if (tipo == "exponencial") {
+    stopifnot("La tendencia exponencial exige y > 0" = all(y > 0))
+  }
+  
+  matriz_diseno <- function(tiempo) {
+    if (tipo == "cuadratica") return(cbind(1, tiempo, tiempo^2))
+    cbind(1, tiempo)
+  }
+  
+  tiempo <- 1:n
+  X <- matriz_diseno(tiempo)
+  z <- if (tipo == "exponencial") log(y) else y
+  
+  coef <- as.numeric(solve(crossprod(X), crossprod(X, z)))
+  residuos <- as.numeric(z - X %*% coef)
+  gl <- n - p
+  sigma2 <- sum(residuos^2) / gl
+  r2 <- 1 - sum(residuos^2) / sum((z - mean(z))^2)
+  durbin_watson_residuos <- sum(diff(residuos)^2) / sum(residuos^2)
+  
+  inversa <- solve(crossprod(X))
+  ee_ordinario <- sqrt(diag(sigma2 * inversa))
+  
+  rezagos <- floor(4 * (n / 100)^(2 / 9))
+  u <- X * residuos
+  S <- crossprod(u)
+  
+  for (l in seq_len(rezagos)) {
+    G <- crossprod(u[(l + 1):n, , drop = FALSE], u[1:(n - l), , drop = FALSE])
+    S <- S + (1 - l / (rezagos + 1)) * (G + t(G))
+  }
+  
+  ee_robusto <- sqrt(diag(inversa %*% S %*% inversa))
+  
+  nombres <- switch (tipo,
+                     lineal = c("beta0", "beta1"),
+                     cuadratica = c("beta0", "beta1", "beta2"),
+                     exponencial = c("a", "teta")
+  )
+  
+  t_ordinario <- coef / ee_ordinario
+  t_robusto <- coef / ee_robusto
+  
+  
+  
+  tabla <- data.frame(estimacion = coef,
+                      ee_ordinario = ee_ordinario,
+                      ee_robusto = ee_robusto,
+                      t_ordinario = t_ordinario,
+                      p_ordinario = 2 * pt(abs(t_ordinario), df = gl, lower.tail = FALSE),
+                      t_robusto = t_robusto,
+                      p_robusto = 2 * pt(abs(t_robusto), df = gl, lower.tail = FALSE),
+                      row.names = nombres)
+  
+  factor <- if (corregir_sesgo) exp(sigma2 / 2) else 1
+  evaluar <- function(tiempo){
+    valores <- as.numeric(matriz_diseno(tiempo) %*% coef)
+    if (tipo == "exponencial") valores <- exp(valores) * factor
+    valores
+    
+  }
+  
+  yhat <- evaluar(tiempo)
+  
+  pronosticar <- function(h) {
+    stopifnot("h debe ser un entero positivo" =
+                is.numeric(h) && length(h) == 1 && h == round(h) && h >= 1)
+    evaluar((n + 1):(n + h))
+  }
+  
+  if (tipo == "lineal") {
+    coeficientes <- c(beta0 = coef[1], beta1 = coef[2])
+    
+  }
+  
+  else if (tipo == "cuadratica") {
+    coeficientes <- c(beta0 = coef[1], beta1 = coef[2], beta2 = coef[3])
+  }
+  
+  else {
+    coeficientes <- c(a = coef[1], teta = coef[2],
+                      beta0 = exp(coef[1]), beta1 = exp(coef[2]))
+  }
+  
+  list(yhat = yhat,
+       pronosticar = pronosticar,
+       parametros = list(tipo = tipo, coeficientes = coeficientes,
+                         tabla = tabla, r2 = r2, sigma2 = sigma2,
+                         durbin_watson = durbin_watson_residuos,
+                         rezagos_hac = rezagos,
+                         corregir_sesgo = corregir_sesgo, n = n))
+}
