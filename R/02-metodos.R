@@ -389,3 +389,45 @@ optimizar <- function(y, metodo, rejilla = NULL){
   list(metodo = metodo, rejilla = tabla, optimo = optimo, en_borde = en_borde)
   
 }
+
+# Dibuja la curva de MSE contra alpha o k
+
+grafico_mse <- function(opt, titulo) {
+  if (opt$metodo == "holt") {
+    ggplot(opt$rejilla, aes(x = alpha, y = beta, fill = mse)) +
+      geom_tile() +
+      geom_point(data = opt$optimo, shape = 4, size = 4, stroke = 1.5, color = "hotpink1") +
+      scale_fill_gradient(low = "white", high = "#009ACD") +
+      labs(title = titulo, x = "alpha", y = "beta", fill = "MSE") +
+      theme_minimal()
+  } else {
+    columna <- if (opt$metodo == "ses") "alpha" else "k"
+    ggplot(opt$rejilla, aes(x = .data[[columna]], y = mse)) +
+      geom_line(color = "#009ACD") +
+      geom_point(color = "#009ACD") +
+      geom_point(data = opt$optimo, size = 3.5, color = "hotpink1") +
+      labs(title = titulo, x = columna, y = "MSE de un paso") +
+      theme_minimal()
+  }
+}
+
+# Si el optimo cae en el borde de la rejilla, explica que significa.
+interpretar_borde <- function(opt) {
+  if (!opt$en_borde) return(invisible(NULL))
+  if (opt$metodo %in% c("ses", "holt")) {
+    valores <- opt$rejilla$alpha
+    if (opt$optimo$alpha == max(valores)) {
+      cat("  El optimo cae en el borde superior de alpha: equivale al pronostico ingenuo",
+          "y senala que la serie no es estacionaria en media.\n")
+    } else if (opt$optimo$alpha == min(valores)) {
+      cat("  El optimo cae en el borde inferior de alpha: el metodo casi no reacciona a lo reciente.\n")
+    }
+  } else {
+    valores <- opt$rejilla$k
+    if (opt$optimo$k == min(valores)) {
+      cat("  El optimo cae en el borde inferior de k: una ventana muy corta.\n")
+    } else if (opt$optimo$k == max(valores)) {
+      cat("  El optimo cae en el borde superior de k: convendria probar ventanas aun mas amplias.\n")
+    }
+  }
+}
