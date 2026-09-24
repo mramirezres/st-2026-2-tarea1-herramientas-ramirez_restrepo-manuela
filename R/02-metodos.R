@@ -318,3 +318,74 @@ ajustar_tendencia <- function(y, tipo, corregir_sesgo = F) {
                          rezagos_hac = rezagos,
                          corregir_sesgo = corregir_sesgo, n = n))
 }
+
+# Optimización
+
+mse_un_paso <- function(y, yhat) {
+  error <- y - yhat
+  usar <- !is.na(error)
+  if (!any(usar)) return(NA_real_)
+  mean(error[usar]^2)
+  
+}
+
+optimizar <- function(y, metodo, rejilla = NULL){
+  validar_serie(y)
+  n <- length(y)
+  
+  if (is.null(rejilla)) {
+    if (metodo %in% c("mm", "dmm")) rejilla <- 2:12
+    if (metodo == "ses") rejilla <- seq(0.02, 0.98, by = 0.02)
+    if (metodo == "holt") {
+      valores <- seq(0.05, 0.95, by = 0.05)
+      rejilla <- expand.grid(alpha = valores, beta = valores)
+    }
+  }
+  
+  if (metodo == "holt") {
+    tabla <- data.frame(alpha = rejilla$alpha, beta = rejilla$beta)
+  } else {
+    tabla <- data.frame(rejilla)
+    names(tabla) <- if (metodo == "ses") "alpha" else "k"
+    
+  }
+  
+  tabla$mse <- NA_real_
+  
+  for (i in seq_len(nrow(tabla))) {
+    ajuste <- NULL
+    
+    if (metodo == "mm" && tabla$k[i] <= n - 1){
+      ajuste <- ajustar_mm(y, tabla$k[i])
+    } else if (metodo == "dmm" && 2 * tabla$k[i] <= n) {
+      ajuste <- ajustar_dmm(y, tabla$k[i])
+    } else if (metodo == "ses") {
+      ajuste <- ajustar_ses(y, tabla$alpha[i])
+    } else if (metodo == "holt") {
+      ajuste <- ajustar_holt(y, tabla$alpha[i], tabla$beta[i])
+    }
+    
+    if (!is.null(ajuste)) {
+      tabla$mse[i] <- mse_un_paso(y, ajuste$yhat)
+    }
+    
+  }
+  
+  mejor <- which.min(tabla$mse)
+  optimo <- tabla[mejor, , drop = F]
+  rownames(optimo) <- NULL
+  
+  parametros <- setdiff(names(tabla), "mse")
+  en_borde <- FALSE
+  for (col in parametros) {
+    valores <- tabla[[col]]
+    if (length(unique(valores)) > 1) {
+      if (valores[mejor] == min(valores) || valores[mejor] == max(valores)) {
+        en_borde <- TRUE
+      }
+    }
+  }
+  
+  list(metodo = metodo, rejilla = tabla, optimo = optimo, en_borde = en_borde)
+  
+}
