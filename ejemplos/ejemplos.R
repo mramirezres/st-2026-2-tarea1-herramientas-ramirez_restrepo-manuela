@@ -66,7 +66,7 @@ cat("  Observaciones:", n, "\n")
 
 cat("\n2. PATRON DE LA SERIE\n")
 
-ggsave("figs/e1-serie.png", graficar_serie(datos, "Descubrimientos importantes por anio"), width = 8, height = 4.5)
+ggsave("figs/e1-serie.png", graficar_serie(datos, "Descubrimientos importantes por año"), width = 8, height = 4.5)
 
 ggsave("figs/e1-correlograma.png", correlograma(datos), width = 8, height = 6)
 
