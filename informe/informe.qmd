@@ -1,0 +1,1749 @@
+---
+title: "Tarea 1 — Series de tiempo"
+subtitle: "Series de tiempo"
+author: "Manuela Ramírez Restrepo"
+institute: "Departamento de Estadística - UNALMED"
+date: today
+lang: es
+df-print: paged
+toc: true
+toc-title: "Contenido"
+number-sections: true
+format:
+  html:
+    code-fold: show
+    code-tools: true
+    code-summary: "Mostrar/ocultar código"
+    embed-resources: true
+    theme: flatly
+    smooth-scroll: true
+editor_options:
+  chunk_output_type: console
+---
+
+```{r}
+#| message: false
+#| warning: false
+
+# Librerías 
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+```
+
+```{r}
+#| label: setup
+#| include: false
+
+source("../R/00-lectura.R")
+source("../R/01-graficos.R")
+source("../R/02-metodos.R")
+source("../R/03-evaluacion.R")
+
+dir.create("figs", showWarnings = FALSE)
+
+# Función auxiliar para dar formato a las tablas
+formatear_tabla <- function(df, titulo = NULL, digitos = 4) {
+  df %>%
+    kbl(caption = titulo, digits = digitos, align = "c") %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+      full_width = FALSE,
+      position = "center"
+    )
+}
+
+# 'mostrar_prueba' formateada para HTML
+mostrar_prueba_html <- function(nombre, h0, h1, distribucion, res, nota = NULL) {
+  if (is.na(res$valor_p)) {
+    decision <- "se compara con las cotas dL y dU de la tabla"
+  } else if (res$valor_p < 0.05) {
+    decision <- "<span style='color: red; font-weight: bold;'>se rechaza H0 al 5%</span>"
+  } else {
+    decision <- "<span style='color: green; font-weight: bold;'>no se rechaza H0 al 5%</span>"
+  }
+  
+  critico <- if (is.na(res$valor_critico)) "no aplica" else format(res$valor_critico, digits = 5)
+  valor_p <- if (is.na(res$valor_p)) "no aplica" else format(res$valor_p, digits = 3)
+  
+  df_prueba <- data.frame(
+    Métrica = c("H0", "H1", "Estadístico", "Distribución", "Valor Crítico 5%", "Valor p", "Decisión"),
+    Valor = c(h0, h1, format(res$estadistico, digits = 5), distribucion, critico, valor_p, decision)
+  )
+  
+  if (!is.null(nota)) {
+    df_prueba <- rbind(df_prueba, data.frame(Métrica = "Nota", Valor = nota))
+  }
+  
+  kbl(df_prueba, caption = paste("Prueba de Hipótesis:", nombre), escape = FALSE, col.names = NULL) %>%
+    kable_styling(bootstrap_options = c("hover", "condensed"), full_width = FALSE, position = "center") %>%
+    column_spec(1, bold = TRUE, width = "12em")
+}
+
+# Funciones del script original
+fuente_help <- function(tema) {
+  ayuda <- do.call(help, list(tema, package = "datasets"))
+  texto <- capture.output(tools::Rd2txt(utils:::.getHelpFile(ayuda),
+                                        options = list(underline_titles = FALSE)))
+  inicio <- which(texto == "Source:")
+  encabezados <- which(grepl("^[A-Z][A-Za-z ]*:$", texto))
+  fin <- min(c(encabezados[encabezados > inicio], length(texto) + 1)) - 1
+  fuente <- paste(texto[(inicio + 1):fin], collapse = " ")
+  fuente <- gsub("_", "", fuente)
+  trimws(gsub("[[:space:]]+", " ", fuente))
+}
+
+ingenuo <- function(y_est, h, s = 1) {
+  n <- length(y_est)
+  if (s == 1) {
+    return(rep(y_est[n], h))
+  }
+  y_est[n - s + ((1:h - 1) %% s) + 1]
+}
+```
+
+# Ejemplo 1: Media Simple
+
+La serie analiza el número de grandes descubrimientos científicos por año entre 1860 y 1959, registrada bajo el nombre discoveries en R. Cuenta con un total de 100 observaciones anuales (frecuencia 1) extraídas de The World Almanac and Book of Facts (edición de 1975). 
+
+```{r e1-carga}
+fuente <- fuente_help("discoveries")
+datos <- leer_serie(discoveries, fuente, "descubrimiento por año")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(discoveries), all(y == as.numeric(discoveries)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("discoveries", fuente, "descubrimientos por año", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "Descripción de la Serie - Ejemplo 1")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r e1-patron}
+g1 <- graficar_serie(datos, "Descubrimientos importantes por año")
+ggsave("figs/e1-serie.png", g1, width = 8, height = 4.5)
+g1
+
+g2 <- correlograma(datos)
+ggsave("figs/e1-correlograma.png", g2, width = 8, height = 6)
+g2
+```
+
+En el gráfico se observa que la serie es estacionaria en media, ya que no presenta cambios de nivel a lo largo del tiempo, lo cual se confirma en el correlograma al ver que los coeficientes de autocorrelación caen rápidamente a cero. Asimismo, la serie no muestra comportamiento estacional, ya que no se aprecian patrones repetitivos en los datos ni picos en rezagos múltiples. 
+
+### contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al analizar la serie discoveries frente a sus primeros 24 rezagos, se observa que únicamente 3 de ellos superan las bandas de significancia estadística. A nivel individual, esto indica que la cantidad de descubrimientos anuales guarda una correlación significativa con la información de periodos específicos pasados (particularmente los primeros rezagos) 
+
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+Para la serie `discoveries`, se obtuvo un valor p de 0.0518. Al ser mayor a 0.05, no se rechaza la hipótesis nula, lo que indica que no existe autocorrelación conjunta en los primeros 6 rezagos. En consecuencia, la información de los periodos pasados no presenta una estructura lineal significativa para predecir los valores presentes 
+
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+Para la serie discoveries, la partición de los datos se realizó reservando los primeros 88 datos para el conjunto de entrenamiento (estimación del modelo) y los últimos 12 datos para el conjunto de validación, permitiendo evaluar la precisión de las predicciones frente a observaciones reales. 
+
+:::
+
+## Método
+
+Tal como se evidenció en los análisis gráficos, la serie sugiere ser estacionaria en media y no presenta patrones de tendencia ni estacionalidad. Por lo tanto, se decidió implementar el método de Media Simple. La estimación del nivel medio obtenida a partir del conjunto de entrenamiento fue de 3.307 descubrimientos por año.  
+
+::: {.panel-tabset}
+
+### Ajuste
+
+```{r}
+ajuste <- ajustar_media(y_est)
+formatear_tabla(data.frame(media = ajuste$parametros$media), "Parámetro Estimado")
+```
+
+### Medidas
+
+```{r}
+p <- 1
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+
+formatear_tabla(tabla, "Comparación de Desempeño")
+```
+
+Al comparar el método de Media Simple con el método Ingenuo, se observa que la Media Simple obtiene valores menores en todas las métricas de error. Específicamente, registra un MSE de 4.880 en comparación con el 7.750 del método Ingenuo, confirmando un mejor desempeño al cometer en promedio menos errores. Asimismo, el modelo se equivoca en promedio en 1.955  unidades (MAE). Finalmente, un MASE menor a 1 refuerza que la Media Simple supera al pronóstico de referencia. 
+
+### Gráficos
+
+```{r}
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e1-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e1-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+El correlograma de los residuos confirma que los errores continúan autocorrelacionados, ya que los rezagos 1 y 2 superan las bandas de significancia. Por su parte, la gráfica de los residuos muestra que, aunque estos oscilan alrededor de cero, presentan una dispersión considerable y patrones persistentes, lo que evidencia que el modelo no ha capturado toda la estructura de la serie. 
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l."), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l.", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20)"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelacion de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**Prueba t de media cero:** Con un valor p = 0.846, no se rechaza la hipótesis nula, lo que indica que no existe evidencia estadística para sugerir sesgo en las predicciones.
+
+**Prueba de Ljung-Box:** Se obtuvo un valor p = 0.128, por lo que no se rechaza H0. Esto sugiere que, de forma conjunta en los primeros rezagos, no hay autocorrelación global significativa.
+
+**Prueba de Jarque-Bera:** Al obtener un valor p inferior a cualquier nivel de significancia , se rechaza H0, lo que confirma que los residuos no siguen una distribución normal.
+
+**Prueba de Durbin-Watson:** El estadístico se ubicó en 1.5043. Al estar por debajo de 2, sugiere la presencia de cierta autocorrelación positiva de primer orden en los errores, lo cual coincide con los picos observados en los primeros rezagos del correlograma.
+
+
+### Gráfico Final
+
+```{r e1-ajuste}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Descubrimientos importantes por año (media)", ingenuo = pron_ing)
+ggsave("figs/e1-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+Aunque en la representación gráfica del periodo de validación el pronóstico ingenuo parece ajustarse mejor a la trayectoria de los datos, al evaluar las métricas de precisión se confirma que la Media Simple presenta un mejor desempeño al cometer errores de menor magnitud en general. 
+
+:::
+
+**Conclusión:** Se ajustó un modelo de Media Simple estimando un nivel medio de 3.307 descubrimientos anuales a partir de un conjunto de entrenamiento de 88 observaciones y validado en 12 periodos. Frente al método ingenuo, que obtuvo un MSE de 7.750, el modelo ajustado redujo el MSE a 4.880, con un MAE de 1.955 y un MASE inferior a 1. La validación de errores mostró ausencia de sesgo (p=0.846 en la prueba t) y de autocorrelación conjunta (p=0.128 en Ljung-Box), aunque los residuos no fueron normales (Jarque-Bera con p<0.05) y mostraron leve autocorrelación de primer orden con un estadístico Durbin-Watson de 1.5043
+
+**Recomendación:** Este pronóstico le sirve a personas que organizan presupuestos o planes científicos y solo necesitan una idea general de cuántos avances se logran por año a largo plazo, sin importar los altibajos de cada año. Es razonable usarlo para planear en periodos de corto a mediano plazo, hasta un máximo de 12 años. Su gran limitación es que es un método muy rígido que no se da cuenta si los descubrimientos están subiendo o bajando recientemente, lo que deja un fallo promedio de 1.955 descubrimientos por año respecto a lo que ocurre en la realidad.
+
+# Ejemplo 2: Media Móvil
+
+La serie analiza el número de grandes descubrimientos científicos por año entre 1860 y 1959, registrada bajo el nombre `discoveries`  en R. Cuenta con un total de 100 observaciones anuales (frecuencia 1) extraídas de The World Almanac and Book of Facts (edición de 1975).
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("discoveries")
+datos <- leer_serie(discoveries, fuente, "descubrimientos por año")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(discoveries), all(y == as.numeric(discoveries)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("discoveries", fuente, "descubrimientos por año", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 2")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Descubrimientos importantes por año")
+ggsave("figs/e2-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e2-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+En el gráfico se observa que la serie es estacionaria en media, ya que no presenta cambios de nivel a lo largo del tiempo, lo cual se confirma en el correlograma al ver que los coeficientes de autocorrelación caen rápidamente a cero. Asimismo, la serie no muestra comportamiento estacional, ya que no se aprecian patrones repetitivos en los datos ni picos en rezagos múltiples. 
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al analizar la serie discoveries frente a sus primeros 24 rezagos, se observa que únicamente 3 de ellos superan las bandas de significancia estadística. A nivel individual, esto indica que la cantidad de descubrimientos anuales guarda una correlación significativa con la información de periodos específicos pasados (particularmente los primeros rezagos) 
+
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+Para la serie discoveries, se obtuvo un valor p de 0.0518. Al ser mayor a 0.05, no se rechaza la hipótesis nula, lo que indica que no existe autocorrelación conjunta en los primeros 6 rezagos. En consecuencia, la información de los periodos pasados no presenta una estructura lineal significativa para predecir los valores presentes 
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+Para la serie discoveries, la partición de los datos se realizó reservando los primeros 88 datos para el conjunto de entrenamiento (estimación del modelo) y los últimos 12 datos para el conjunto de validación, permitiendo evaluar la precisión de las predicciones frente a observaciones reales. 
+
+:::
+
+## Método
+
+Tal como se evidenció en los análisis gráficos, la serie no presenta una tendencia ni un patrón de estacionalidad definidos, por lo que constituye una buena candidata para ser modelada mediante una Media Móvil. 
+
+
+::: {.panel-tabset}
+
+### Optimo
+
+```{r}
+# 3. Ajuste (mm)
+opt <- optimizar(y_est, "mm")
+formatear_tabla(cbind(opt$optimo, en_borde = opt$en_borde), "4. AJUSTE (mm) - Optimización")
+```
+
+```{r}
+g_opt <- grafico_mse(opt, "MSE de un paso - Descubrimientos importantes por año")
+ggsave("figs/e2-optimizacion.png", g_opt, width = 7, height = 5)
+g_opt
+```
+
+```{r}
+interpretar_borde(opt)
+
+ajuste <- ajustar_mm(y_est, opt$optimo$k)
+```
+
+El proceso de optimización indicó que el tamaño adecuado para la Media Móvil es de 9 periodos, lo que significa que el pronóstico se calcula utilizando únicamente el promedio de las últimas 9 observaciones. Este parámetro ofrece el mejor ajuste al registrar el MSE bajo 5.15 y resulta válido al no encontrarse en los límites del rango evaluado (que iba de 2 a 12), es decir, no fue necesario ampliar la búsqueda para encontrar un mejor valor. En el gráfico se ve cómo con ventanas muy cortas, como 2 años, el error es mucho más alto, porque el promedio sigue muy de cerca cada dato suelto en vez de suavizarlo; a medida que la ventana crece, el error baja hasta llegar a su punto más bajo en 9, y luego vuelve a subir un poco. Esto muestra que 9 años es el punto justo: ni tan corto que reaccione de más a los datos, ni tan largo que se demore en captar los cambios reales del nivel de la serie.
+
+### Medidas
+
+```{r}
+p <- 1 
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+Al comparar la Media Móvil con el método Ingenuo en el periodo de validación, se observa que la Media Móvil obtiene valores menores en todas las métricas de error. Registra un MSE de 2.083 frente al 7.750 del pronóstico Ingenuo, confirmando un mejor desempeño al cometer errores de menor magnitud. Asimismo, la Media Móvil se equivoca en promedio en 1.250 unidades (MAE), prácticamente la mitad de lo reportado por el método Ingenuo. Finalmente, al obtener un MASE menor a 1, se reafirma que el modelo supera de forma clara al pronóstico de referencia. 
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e2-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e2-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+En el correlograma de los residuos, se observa que todos los rezagos se encuentran dentro de las bandas de significancia. Esto indica la ausencia de autocorrelación en los errores, sugiriendo que se comportan como ruido blanco. 
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Con un valor p de 0.809, no se rechaza la hipótesis nula, lo que indica que no existe evidencia estadística para sugerir sesgo en las predicciones.
+
+**Ljung-Box:** Se obtuvo un valor p de 0.503, por lo que no se rechaza la hipótesis nula. Esto confirma la ausencia de autocorrelación conjunta en los errores, respaldando la presencia de ruido blanco en coherencia con lo observado en el correlograma.
+
+**Jarque-Bera:** Al ser el valor p inferior a cualquier nivel de significancia alfa, se rechaza la hipótesis nula, lo que demuestra que los residuos no siguen una distribución normal.
+
+**Durbin-Watson:** El estadístico se ubicó en 1.6839. Al estar cercano a 2, confirma que el modelo de Media Móvil eliminó efectivamente la autocorrelación de primer orden en los errores.
+
+::: 
+
+### Gráfico Final
+
+```{r e2-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Descubrimientos importantes por año (mm)", ingenuo = pron_ing)
+ggsave("figs/e2-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+Aunque en la gráfica del periodo de validación, el pronóstico ingenuo parece estar más cerca de las observaciones reales, al analizar el conjunto completo de métricas se confirma que la Media Móvil ofrece un mejor desempeño al cometer errores de menor magnitud en general. 
+
+Al comparar los dos métodos aplicados a esta serie, se observa que la Media Móvil captura de forma más precisa su comportamiento, ya que se adapta a la información reciente, a diferencia de la Media Simple que aplica un ajuste rígido basado en toda la historia. Dado que la serie registraba una tendencia decreciente en el tramo final, la Media Móvil logró detectar esta caída y generar un pronóstico superior. 
+
+**Conclusión:** Se ajustó un modelo de Media Móvil con un tamaño de ventana óptimo de k=9 periodos, evaluado en una partición de 88 datos de entrenamiento y 12 de validación. Frente al método ingenuo, el cual registró un MSE de 7.750, la Media Móvil mejoró la precisión produciendo un MSE de 2.083, un MAE de 1.250 y un MASE menor a 1. La validación de errores confirmó ausencia de sesgo (p=0.809 en la prueba t), comportamiento de ruido blanco sin autocorrelación conjunta (p=0.503 en Ljung-Box) y un estadístico Durbin-Watson de 1.6839, aunque persiste la no normalidad en los residuos (p<0.05 en Jarque-Bera). 
+
+**Recomendaciones:** Esta proyección le sirve a los directores de universidades o centros de investigación que quieren predecir los resultados de los próximos años basándose solo en lo que ha pasado últimamente, suavizando los brincos raros de un solo año. Lo más sensato es usarlo para mirar de 1 a 3 años hacia el futuro antes de volver a actualizar las cuentas. El techo o límite del método es que, cuando la cifra real cae o sube de golpe, se tarda en reaccionar, generando un margen de error promedio de 1.250 descubrimientos al año. 
+
+
+# Ejemplo 3: Suavizamiento Exponencial Simple (SES)
+
+La serie registra el flujo anual del río Nilo entre 1871 y 1970, almacenada bajo el nombre `Nile` en R. Contiene un total de 100 observaciones anuales (frecuencia 1) expresadas en cientos de millones de metros cúbicos. Los datos provienen del trabajo de Durbin y Koopman (2001) sobre análisis de series de tiempo. 
+
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("Nile")
+datos <- leer_serie(Nile, fuente, "10^8 m^3")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(Nile), all(y == as.numeric(Nile)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("Nile", fuente, "10^8 m^3", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 3")
+```
+
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Caudal anual del Nilo")
+ggsave("figs/e3-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e3-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+La serie presenta un cambio estructural en su comportamiento. Este cambio abrupto de nivel a finales del siglo XIX coincidió con la construcción de la primera presa de Asuán (1898–1902) en Egipto, lo que alteró de forma permanente la regulación y medición del flujo medio del río. Por su parte, el correlograma muestra la ausencia de patrones estacionales o de rezagos múltiples significativos.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al analizar los primeros 24 rezagos en el correlograma, se observa que 11 de ellos superan los límites de significancia. Esto confirma la presencia de una fuerte autocorrelación persistente a lo largo de los años, un comportamiento característico en series con cambios de nivel.
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+Al obtener un valor p inferior a cualquier nivel de significancia alfa, se rechaza la hipótesis nula. Esto confirma la presencia de autocorrelación conjunta en la serie histórica, lo que respalda lo observado previamente en el correlograma. 
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento con 88 observaciones para la estimación del modelo y un conjunto de validación con los 12 datos restantes para la evaluación de las predicciones.
+
+:::
+
+## Método
+
+A pesar de la autocorrelación presente en la serie, el Suavizamiento Exponencial Simple (SES) resulta viable para el periodo de validación. Esto se debe a que el cambio estructural ocurrió en los primeros años de la serie y el modelo asigna un mayor peso a las observaciones más recientes, minimizando el impacto de dicho quiebre en los pronósticos futuros. 
+
+::: {.panel-tabset}
+
+### Optimización
+
+```{r}
+# 3. Ajuste (ses)
+opt <- optimizar(y_est, "ses")
+formatear_tabla(cbind(opt$optimo, en_borde = opt$en_borde), "4. AJUSTE (ses) - Optimización")
+
+g_opt <- grafico_mse(opt, "MSE de un paso - Caudal anual del Nilo")
+ggsave("figs/e3-optimizacion.png", g_opt, width = 7, height = 5)
+g_opt
+```
+
+El proceso de optimización determinó un valor de alfa de 0.24, lo que refleja un ajuste equilibrado al no reaccionar de manera desmedida ante las fluctuaciones de un año a otro. Asimismo, al comprobar que el error cuadrático medio no se encuentra en los límites del rango de búsqueda, se confirma que la estimación del parámetro no es un resultado forzado. En el gráfico se ve una curva en forma de "U": con valores de alfa muy bajos (cerca de 0) el pronóstico casi no reacciona a los datos nuevos y el error es alto; con valores muy altos (cerca de 1) el método le da demasiado peso al último dato, ignorando el resto de la historia, y el error también sube. El punto más bajo de esa curva, marcado en rosado, está justo en 0.24, lejos de los dos extremos, lo que indica que ni un ajuste muy lento ni uno muy brusco son los adecuados para seguir el nivel cambiante del caudal del río.
+
+### Medidas
+
+```{r}
+interpretar_borde(opt)
+
+ajuste <- ajustar_ses(y_est, opt$optimo$alpha)
+p <- 1
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+El método de Suavizamiento Exponencial Simple obtiene un mejor desempeño que el método ingenuo en todas las métricas evaluadas. En el caso del MSE, el método SES registra un valor de 17864 frente a 19685 del pronóstico ingenuo, lo que indica que comete errores de menor magnitud en promedio. Asimismo, el error absoluto promedio (MAE) es de 107 unidades para el SES frente a 111 del ingenuo. En términos porcentuales (MAPE), el método escogido se aleja en promedio un 12.6% de los valores reales, mientras que el ingenuo lo hace en un 13.5%. Finalmente, al obtener un MASE menor a 1, se ratifica que la propuesta supera con claridad al pronóstico de referencia.
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e3-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e3-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+En el correlograma se observa que la totalidad de los rezagos se mantiene dentro de las bandas de significancia, a excepción de uno solo que las sobrepasa levemente. Esto sugiere la ausencia de autocorrelación en los errores, respaldando su comportamiento como ruido blanco. Asimismo, la gráfica de residuos muestra que estos oscilan alrededor de cero y se distribuyen de forma aleatoria, aunque con la presencia de algunos valores atípicos pronunciados.
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Al obtener un valor p de 0.483, no se rechaza la hipótesis nula, lo que confirma que los errores tienen media cero y no existe un sesgo en las estimaciones del método, aspecto previamente observado en los gráficos.
+
+**Ljung-Box:** El valor p de 0.653 indica que no hay evidencia suficiente para rechazar la hipótesis nula, validando que los residuos no presentan autocorrelación y se comportan como ruido blanco, en sintonía con la lectura del correlograma.
+
+**Jarque-Bera:** Con un valor p de 0.848, no se rechaza la hipótesis nula, concluyendo que los errores siguen una distribución normal.
+
+**Durbin-Watson:** Con un valor de 1.6935 (cercano al valor de referencia 2), se confirma la ausencia de autocorrelación lineal inmediata entre periodos consecutivos.
+
+
+:::
+
+### Gráfico Final
+
+```{r e3-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Caudal anual del Nilo (ses)", ingenuo = pron_ing)
+ggsave("figs/e3-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+Aunque el pronóstico ingenuo pueda parecer visualmente más cercano a la trayectoria de los datos de validación, las evaluaciones y métricas previas confirman que el método de suavizamiento exponencial simple comprende mejor la dinámica de la serie. En la gráfica se observa cómo el método asimiló de forma progresiva el cambio de nivel histórico ocurrido a finales del siglo XIX, logrando estabilizar la estimación del caudal promedio de manera sólida para las proyecciones futuras.
+
+**Conclusión:** Se ajustó un modelo de Suavizamiento Exponencial Simple (SES) con un parámetro de suavizado óptimo $\alpha=0.24$, utilizando 88 datos de entrenamiento y 12 de validación. En comparación con el método ingenuo, que registró un MSE de 19 685, un MAE de 111 y un MAPE de 13.5%, el SES redujo las cifras a un MSE de 17 864, un MAE de 107 y un MAPE de 12.6%, con un MASE menor a 1. La validación de errores evidenció ausencia de sesgo (p=0.483), ausencia de autocorrelación (p=0.653 en Ljung-Box y Durbin-Watson de 1.6935) y normalidad en los residuos (p=0.848 en Jarque-Bera). 
+
+**Recomendación:** Este cálculo le sirve a los encargados de gestionar el agua del río o a los agricultores de la zona para calcular cuánta agua habrá disponible tras cambios importantes en el entorno (como la construcción de una presa). Es seguro utilizarlo para hacer planes desde 1 hasta 12 años hacia adelante. Su principal límite es que no adivina los años con lluvias o sequías extremas, equivocándose en promedio en un 12.6% del agua real del río. 
+
+
+# Ejemplo 4: Doble Media Móvil
+
+La serie registra el precio relativo de la gasolina entre enero de 1969 y diciembre de 1984, correspondiente a la variable `PetrolPrice` del conjunto de datos `Seatbelts` en R. Cuenta con un total de 192 observaciones mensuales (frecuencia 12). Los datos provienen de las investigaciones de Harvey (1989), así como de Durbin y Koopman (2001) sobre modelos de series de tiempo. 
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("Seatbelts")
+datos <- leer_serie(Seatbelts[, "PetrolPrice"], fuente, "precio de la gasolina")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(Seatbelts[, "PetrolPrice"]), all(y == as.numeric(Seatbelts[, "PetrolPrice"])))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("Seatbelts[, 'PetrolPrice']", fuente, "precio de la gasolina", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 4")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Precio de la gasolina")
+ggsave("figs/e4-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e4-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+La serie presenta múltiples cambios de nivel a lo largo del tiempo, lo que sugiere que no es estacionaria en media. Este comportamiento se confirma en el correlograma al observar un decaimiento lento hacia cero a medida que aumentan los rezagos. Aunque visualmente se aprecian ciertos patrones en la trayectoria de los datos, el correlograma no muestra la presencia de rezagos múltiples significativos.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 24 rezagos en el correlograma, se observa que 19 de ellos se encuentran fuera de las bandas de significancia. Este comportamiento refleja la presencia de una fuerte autocorrelación en la serie, confirmando la alta dependencia entre las observaciones a lo largo de los meses anteriores. 
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+el valor p es menor que cualquier $\alpha$, por tanto se rechaza H0, es decir existe autocorrelacion, algo que se confirmaba con los contrastes anteriores
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento con 180 observaciones para la estimación del modelo y un conjunto de validación con los 12 datos restantes para la evaluación de los pronósticos.
+
+::: 
+
+## Método
+
+Se optó por el método de Doble Media Móvil debido a que la serie exhibe una tendencia dinámica con variaciones continuas a lo largo del tiempo. A diferencia de la media móvil simple, este método permite corregir el rezago estructural ante la presencia de tendencia, adaptándose con mayor rapidez a las fluctuaciones y cambios de dirección del precio. 
+
+::: {.panel-tabset}
+
+### Optimización
+
+```{r}
+# 3. Ajuste (dmm)
+opt <- optimizar(y_est, "dmm")
+formatear_tabla(cbind(opt$optimo, en_borde = opt$en_borde), "4. AJUSTE (dmm) - Optimización")
+
+g_opt <- grafico_mse(opt, "MSE de un paso - Precio de la gasolina")
+ggsave("figs/e4-optimizacion.png", g_opt, width = 7, height = 5)
+g_opt
+
+interpretar_borde(opt)
+
+```
+
+El proceso de optimización determinó un valor óptimo de k=2, por lo que los promedios se calcularán considerando únicamente dos periodos. No obstante, al analizar el error cuadrático medio (MSE), se observa que este se ubica en el límite inferior del rango de búsqueda, lo que indica que el algoritmo alcanzó la restricción de optimización impuesta para dicho parámetro. En el gráfico se ve que el error sube de forma continua a medida que la ventana crece, sin ningún mínimo interior: mientras más corto es el período usado para promediar, menor es el error, y el mejor resultado queda justo en el extremo permitido. Esto significa que el precio de la gasolina cambia tan rápido de un mes a otro que conviene seguirlo muy de cerca, casi con el dato más reciente 
+
+### Medidas
+
+```{r}
+ajuste <- ajustar_dmm(y_est, opt$optimo$k)
+p <- 1
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+El método de Doble Media Móvil obtiene un mejor desempeño que el método ingenuo en todas las métricas evaluadas. En el caso del MSE, el método registra un valor aproximadamente la mitad que el del ingenuo, lo que indica que en promedio comete menos errores. Asimismo, la desviación absoluta media (MAD) es de 0.001, lo que muestra que en promedio se equivoca en menos de una unidad. En términos porcentuales (MAPE), el método escogido se aleja en promedio un 1% de los valores reales, mientras que el ingenuo lo hace en casi un 2%. Finalmente, el MASE es menor que 1, por tanto se ratifica que es un mejor método que el ingenuo. 
+
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e4-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e4-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+Los errores oscilan de manera aleatoria alrededor de cero, aunque se evidencian algunos valores muy alejados. Por su parte, en el correlograma aún se aprecian algunos rezagos que sobrepasan las bandas de significancia, lo que sugiere la persistencia de cierta autocorrelación en los residuos
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Al obtener un valor p de 0.998, no se rechaza la hipótesis nula, lo que confirma que los errores tienen media cero y no existe un sesgo en las estimaciones del método.
+
+**Ljung-Box:** El valor p es menor que cualquier nivel de significancia , por lo que se rechaza la hipótesis nula. Esto indica la presencia de autocorrelación en los errores, confirmando que no se comportan como ruido blanco, tal como se apreciaba en el correlograma.
+
+**Jarque-Bera:** El valor p es inferior a cualquier nivel de significancia , por lo que se rechaza la hipótesis nula, concluyendo que los errores no siguen una distribución normal.
+
+**Durbin-Watson:** Con un valor de 1.9844 (muy cercano a 2), se sugiere la ausencia de autocorrelación lineal de primer orden entre periodos consecutivos.
+
+
+::: 
+
+### Gráfico Final
+
+```{r e4-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Precio de la gasolina (dmm)", ingenuo = pron_ing)
+ggsave("figs/e4-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+En la figura se evidencia que el método de Doble Media Móvil se adapta de mejor manera a la estructura del precio de la gasolina. Durante la etapa de estimación, el ajuste a un paso capta con precisión los continuos cambios de nivel de la serie. Asimismo, en el periodo de validación, las proyecciones se aproximan en mayor medida a los datos reales en comparación con el pronóstico ingenuo, ya que este último no logra considerar la dinámica de la tendencia presente en la serie.
+
+
+Al revisar la estructura de los errores, se evidencia la presencia de patrones remanentes, lo que confirma que no se comportan como ruido blanco. Esta situación se explica por el uso de una ventana tan corta (k=2); si bien un valor pequeño de k permite seguir de muy cerca la trayectoria y los cambios rápidos de la serie, pero a costa de dejar información y dinámicas sin explicar en los residuos
+
+**Conclusión:** Se ajustó un modelo de Doble Media Móvil con un parámetro de ventana óptimo en el límite inferior de k=2, aprovechando 180 datos mensuales de entrenamiento y 12 de validación. Frente al método ingenuo, que presentó un MAPE cercano al 2%, el modelo óptimo redujo las cifras a la mitad con un MAD de 0.001, un MAPE del 1% y un MASE menor a 1. En la validación de errores, el modelo mostró ausencia de sesgo (p=0.998) y ausencia de autocorrelación de primer orden (DW=1.9844), pero no superó Ljung-Box (p<0.05) ni Jarque-Bera (p<0.05), manteniendo residuos autocorrelacionados. 
+
+**Recomendaciones:** La fórmula le resulta útil a los dueños de gasolineras o empresas de transporte que compran combustible mes a mes y necesitan reaccionar rápido si el precio empieza a subir o bajar. Solo es recomendable usarlo para proyectar a muy corto plazo, entre 1 y 3 meses. Su límite está en que, al reaccionar tan rápido usando solo la información de los últimos 2 meses, se le escapan detalles más complejos del mercado, manteniendo una falla del 1% en sus pronósticos. 
+
+
+# Ejemplo 5: Tendencia Lineal
+
+La serie registra la población residente en Australia expresada en miles de personas, correspondiente al conjunto de datos `austres` en R. Cuenta con un total de 89 observaciones trimestrales (frecuencia 4), abarcando desde abril de 1971 hasta abril de 1993. Los datos provienen de la publicación de Brockwell y Davis (1996) sobre análisis de series de tiempo. 
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("austres")
+datos <- leer_serie(austres, fuente, "miles de residentes")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(austres), all(y == as.numeric(austres)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("austres", fuente, "miles de residentes", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 5")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Residentes de Australia (trimestral)")
+ggsave("figs/e5-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e5-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+La serie exhibe una clara tendencia creciente con una trayectoria prácticamente rectilínea a lo largo del tiempo. Este comportamiento se confirma en el correlograma (ACF) mediante un decrecimiento lento hacia cero a medida que aumentan los rezagos. Asimismo, en la función de autocorrelación parcial (PACF), el primer rezago alcanza un valor cercano a 1, lo que señala la falta de estacionariedad en media de la serie.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 22 rezagos en el correlograma, se observa que la totalidad de ellos (22) se encuentran por fuera de las bandas de significancia. Este comportamiento refleja la presencia de una autocorrelación extremadamente fuerte en la serie, confirmando una elevada dependencia lineal entre las observaciones a lo largo de los trimestres evaluados. 
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+El valor p es menor que cualquier nivel de significancia $\alpha$, por lo que se rechaza la hipótesis nula. Esto proporciona evidencia suficiente para sugerir la presencia de autocorrelación en la serie, confirmando lo observado tanto en el conteo de rezagos fuera de las bandas como en el comportamiento del correlograma.
+
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento de 77 observaciones trimestrales para la estimación del modelo y un conjunto de validación de 12 datos para evaluar la capacidad predictiva de las estimaciones. 
+
+:::
+
+## Método
+
+Tal como se evidenciaba en el gráfico preliminar de la serie, los datos muestran una trayectoria de crecimiento a lo largo del tiempo. Por lo tanto, se decidió utilizar un modelo de Tendencia Lineal para capturar de manera adecuada esta dinámica 
+
+::: {.panel-tabset}
+
+### Medidas
+
+```{r}
+# 3. Ajuste (lineal)
+ajuste <- ajustar_tendencia(y_est, "lineal")
+p <- 2
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+La evaluación de los errores confirma que el método de Tendencia Lineal presenta un mejor desempeño que el pronóstico ingenuo, al registrar valores inferiores en todas las medidas consideradas. En el caso del MSE, el modelo obtiene un valor de 44 431, resultando ser más de dos veces menor que el del ingenuo, lo que indica que en promedio comete menos errores. Asimismo, la desviación absoluta media (MAD) señala que el modelo se equivoca en promedio en 210 unidades frente a las 322 unidades del método ingenuo. En términos porcentuales (MAPE), las estimaciones se alejan en promedio apenas un 1.2% de la realidad. Finalmente, el valor del MASE resulta ser menor que el del pronóstico de referencia, ratificando a la Tendencia Lineal como una mejor alternativa de modelación.
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e5-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e5-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+Se observa que los errores no oscilan de manera aleatoria alrededor de cero, evidenciando patrones definidos en su comportamiento a lo largo del tiempo. Por su parte, en el correlograma persisten rezagos por fuera de las bandas de significancia, lo que sugiere que el modelo de tendencia lineal no logró capturar toda la información de la serie y, por tanto, los residuos no se comportan como ruido blanco.
+
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Al obtener un valor p aproximadamente de 1, no se rechaza la hipótesis nula, lo que indica que no hay evidencia suficiente para sugerir un sesgo promedio en las estimaciones; sin embargo, tal como se observó en la gráfica de residuos, persisten sesgos locales a lo largo del tiempo.
+
+**Ljung-Box:** El valor p es menor que cualquier nivel de significancia , por lo que se rechaza la hipótesis nula. Esto proporciona evidencia suficiente de la presencia de autocorrelación en los errores, confirmando lo apreciado en el correlograma.
+
+**Jarque-Bera:** Al registrar un valor p de 0.12, no se rechaza la hipótesis nula, concluyendo que no existe evidencia suficiente para dudar de la normalidad en la distribución de los errores.
+
+**Durbin-Watson:** Con un valor de 0.017, al estar sumamente alejado de 2 (y muy cercano a 0), se confirma una fuerte autocorrelación positiva de primer orden, tal como lo señalaba el análisis de la función de autocorrelación parcial (PACF).
+
+
+### Coeficientes y prueba t
+
+```{r}
+# Coeficientes y prueba t con error estándar robusto (específico de tendencia)
+coef <- ajuste$parametros$tabla
+gl <- ajuste$parametros$n - nrow(coef)
+formatear_tabla(coef, "Coeficientes de Regresión")
+
+for (j in 1:nrow(coef)) {
+  res <- list(estadistico = coef$t_robusto[j], valor_critico = qt(0.975, gl), valor_p = coef$p_robusto[j])
+  mostrar_prueba_html(paste("t sobre", rownames(coef)[j], "(error estándar robusto)"),
+                 paste(rownames(coef)[j], "= 0"), paste(rownames(coef)[j], "distinto de 0"),
+                 paste0("t con ", gl, " g.l."), res)
+}
+```
+
+La estimación de la pendiente ($\beta_{1} = 50.71$) indica que la población residente en Australia incrementa en promedio 50.71 miles de personas cada trimestre que transcurre. Con valores p prácticamente iguales a cero y estadísticos t elevados, se confirma la significancia estadística de este parámetro y de la tendencia creciente de la serie.
+
+Al examinar los coeficientes, se observa una diferencia considerable entre los errores estándar ordinarios y los errores estándar robustos; los ordinarios son sensiblemente menores debido a que omiten la fuerte estructura de autocorrelación presente en los residuos, aparentando una precisión irreal. Esta autocorrelación en los errores ya había sido confirmada previamente mediante las gráficas y las pruebas formales de diagnóstico.
+
+
+::: 
+
+### Gráfico Final
+
+```{r e5-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Residentes de Australia (lineal)", ingenuo = pron_ing)
+ggsave("figs/e5-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+En la figura se aprecia claramente que el modelo de Tendencia Lineal ofrece un desempeño considerablemente superior al del método ingenuo. Este último proyecta una línea horizontal al asumir que los datos permanecerán constantes en el tiempo, ignorando por completo la marcada trayectoria creciente que presenta la población residente en Australia. 
+
+Por su parte, el modelo de tendencia lineal acompaña muy de cerca la trayectoria de la serie a lo largo del tiempo. Sin embargo, al mirar el pronóstico al final (la zona sombreada), la línea roja queda un poco por debajo de la línea negra real. Esto pasa porque en los últimos años la población empezó a crecer un poco más rápido de lo normal, y como este modelo usa un ritmo de crecimiento fijo, no alcanza a adaptarse a esa aceleración repentina.
+
+**Conclusión:** Se ajustó un modelo de Tendencia Lineal obteniendo una pendiente estimada de $\hat{\beta}_1$ =50.71 miles de personas por trimestre, con una partición de 77 observaciones de entrenamiento y 12 de validación. En comparación con el método ingenuo, el modelo ajustado redujo el MSE a más de la mitad, es decir a 44 431, disminuyó la MAD de 322 a 210 y logró un MAPE del 1.2% junto a un MASE menor a 1. La validación mostró ausencia de sesgo global (p =1) y normalidad (p=0.12 en Jarque-Bera), pero reveló una severa autocorrelación positiva en los errores (p<0.05 en Ljung-Box y DW=0.017) 
+
+**Recomendación:** Le sirve a los planificadores del gobierno que necesitan estimar cuánta gente vivirá en el país para construir escuelas o carreteras pensando que el país crece a un ritmo parejo. Es adecuado para hacer cálculos a mediano y largo plazo, abarcando hasta los 12 trimestres (3 años) analizados. Su límite es que asume una velocidad de crecimiento fija que no se adapta si la población de repente empieza a crecer más rápido, cometiendo una diferencia promedio de 210 mil personas. 
+
+# Ejemplo 6: Tendencia Cuadrática
+
+La serie registra las millas de pasajeros pagadas (revenue passenger miles) en la aviación comercial de Estados Unidos, correspondiente al conjunto de datos `airmiles` en R. Cuenta con un total de 24 observaciones anuales (frecuencia 1), abarcando desde 1937 hasta 1960. Los datos provienen del F.A.A. Statistical Handbook of Aviation.
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("airmiles")
+datos <- leer_serie(airmiles, fuente, "revenue passenger miles")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(airmiles), all(y == as.numeric(airmiles)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("airmiles", fuente, "revenue passenger miles", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 6")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Millas-pasajero de aerolíneas de EE. UU.")
+ggsave("figs/e6-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e6-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+La serie presenta una clara tendencia creciente que evidencia la falta de estacionariedad en media. A diferencia de la serie anterior, la trayectoria no muestra un comportamiento estrictamente rectilíneo, sino que sugiere una ligera curvatura a lo largo del tiempo. Por su parte, en el correlograma se ratifica la presencia de esta tendencia mediante el decrecimiento lento y progresivo de las autocorrelaciones a medida que aumentan los rezagos.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 6 rezagos en el correlograma, se observa que la mayoría de ellos (4) se encuentran por fuera de las bandas de significancia. Este resultado confirma la presencia de autocorrelación en la serie y evidencia la dependencia lineal que existe entre los datos de periodos anuales consecutivos.
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+El valor p es menor que cualquier nivel de significancia $\alpha$, por lo que se rechaza la hipótesis nula. Esto proporciona evidencia suficiente para sugerir la presencia de autocorrelación en la serie, confirmando lo observado tanto en el conteo de rezagos fuera de las bandas de significancia como en el comportamiento del correlograma.
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento compuesto por 20 observaciones anuales para la estimación del modelo y un conjunto de validación de 4 datos para evaluar el desempeño predictivo de las estimaciones.
+
+:::
+
+## Método
+
+Dado que en el análisis gráfico preliminar se evidenció una clara tendencia creciente con una notable curvatura a lo largo del tiempo, se optó por emplear un modelo de Tendencia Cuadrática. Esta especificación permite capturar la aceleración en el crecimiento de la serie mejor que una recta tradicional.
+
+::: {.panel-tabset}
+
+```{r}
+# 3. Ajuste (cuadrática)
+ajuste <- ajustar_tendencia(y_est, "cuadratica")
+p <- 3
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+```
+
+### Medidas
+
+```{r}
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+La evaluación de los errores confirma que el método de Tendencia Cuadrática presenta un desempeño considerablemente superior al del pronóstico ingenuo, al registrar valores inferiores en todas las medidas consideradas. En el caso del MSE, el modelo obtiene un valor de 2 416 498, resultando ser casi la mitad del valor registrado por el ingenuo, lo que indica que en promedio comete errores de menor magnitud. Asimismo, la desviación absoluta media (MAD) señala que el modelo se equivoca en promedio en 1409 unidades (millas de pasajeros) frente a un error cuatro veces mayor en el método de referencia. En términos porcentuales (MAPE), las estimaciones se alejan en promedio apenas un 5% de los datos reales, en comparación con el 18% del ingenuo. Finalmente, el valor del MASE resulta ser significativamente menor que el del pronóstico ingenuo, ratificando a la Tendencia Cuadrática como una opción de modelación superior. 
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e6-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e6-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+Se observa que los errores no se distribuyen de manera aleatoria alrededor de cero, evidenciando fluctuaciones y patrones claros en su comportamiento a lo largo del tiempo. De igual forma, en el correlograma se aprecia que uno de los rezagos sobrepasa la banda de significancia, lo que sugiere la presencia de autocorrelación y permite sospechar que los residuos no se comportan como ruido blanco.
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Con un valor p aproximado de 1, no se rechaza la hipótesis nula, lo que indica que no hay evidencia suficiente para sugerir que existe un sesgo promedio; sin embargo, en la gráfica se evidencia que existen sesgos locales.
+
+**Ljung-Box:** Con un valor p de 0.0011, se rechaza la hipótesis nula, lo que significa que hay evidencia suficiente para sugerir la presencia de autocorrelación en los errores, algo que ya se evidenciaba en el correlograma.
+
+**Jarque-Bera:** Con un valor p de 0.464, no se rechaza la hipótesis nula; es decir, no existe evidencia suficiente para sugerir que los datos no siguen una distribución normal.
+
+**Durbin-Watson:** Con un estadístico de 0.84885, al encontrarse considerablemente alejado de 2, se puede sospechar que existe autocorrelación de primer orden, un aspecto que también se observa en el correlograma.
+
+
+### Coeficientes y prueba t
+
+```{r}
+coef <- ajuste$parametros$tabla
+gl <- ajuste$parametros$n - nrow(coef)
+formatear_tabla(coef, "Coeficientes de Regresión Cuadrática")
+
+for (j in 1:nrow(coef)) {
+  res <- list(estadistico = coef$t_robusto[j], valor_critico = qt(0.975, gl), valor_p = coef$p_robusto[j])
+  mostrar_prueba_html(paste("t sobre", rownames(coef)[j], "(error estándar robusto)"),
+                 paste(rownames(coef)[j], "= 0"), paste(rownames(coef)[j], "distinto de 0"),
+                 paste0("t con ", gl, " g.l."), res)
+}
+```
+
+El coeficiente de la pendiente $\hat{\beta}_1$ es 473.93, es decir, por cada periodo que pasa va disminuyendo el valor inicial, mientras que $\hat{\beta}_2$ es 74.33, lo que indica que el crecimiento se acelera con el tiempo. Al mirar las pruebas individuales de los coeficientes, se confirma la significancia estadística de ambos, lo que demuestra que la presencia de la curvatura es significativa.
+
+Al examinar la precisión de las estimaciones, se observa una diferencia importante entre los errores estándar ordinarios y los errores estándar robustos; los ordinarios resultan ser menores al ignorar la estructura temporal de los residuos. Esta discrepancia confirma nuevamente la presencia de autocorrelación en los errores, en relación con los hallazgos del correlograma y las pruebas de diagnóstico previas.
+
+:::
+
+### Gráfico Final
+
+```{r e6-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Millas-pasajero (cuadrática)", ingenuo = pron_ing)
+ggsave("figs/e6-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+En la gráfica se evidencia que el modelo de Tendencia Cuadrática logra captar muy bien el comportamiento de la serie, adaptándose de forma adecuada al crecimiento acelerado que presenta a lo largo del tiempo. A diferencia del modelo ingenuo, que proyecta una línea plana al ignorar la dinámica de los datos, la tendencia cuadrática acompaña de cerca la trayectoria real en el periodo de evaluación.
+
+Sin embargo, al examinar la zona de pronóstico (área sombreada), se observa que la línea roja del modelo queda ligeramente por encima de la línea negra observada. Esto sucede porque la curva del modelo proyecta un impulso hacia arriba un poco más pronunciado que la desaceleración suave que experimentó la serie en los últimos periodos.
+
+**Conclusión:** Se ajustó un modelo de Tendencia Cuadrática con coeficientes $\hat{\beta}_1 = 473.93$ y $\hat{\beta}_2 = 74.33$, utilizando 20 observaciones de entrenamiento y 4 de validación. Frente al método ingenuo, que registró un MAPE del 18%, el modelo cuadrático disminuyó las cifras a un MSE de 2 416 498, una MAD de 1409 millas de pasajeros, un MAPE del 5% y un MASE significativamente menor que el de referencia. La validación indicó ausencia de sesgo global (p = 1) y distribución normal de residuos (p=0.464 en Jarque-Bera), aunque acusó autocorrelación (p=0.0011 en Ljung-Box y DW=0.84885). 
+
+**Recomendaciones:** Este estudio le sirve a las aerolíneas o aeropuertos para planear la compra de aviones o contratación de personal cuando los viajes crecen cada año más rápido que el anterior. Es razonable aplicarlo para mirar de 1 a 4 años hacia el futuro. El tope del método es que dibuja una curva hacia arriba tan pronunciada que, si la venta de pasajes se frena un poco, termina apuntando más alto de lo real con un desfase de 1409 millas de pasajeros. 
+
+
+# Ejemplo 7: Tendencia Exponencial
+
+Se empleó el conjunto de datos `JohnsonJohnson` disponible en R. La serie contiene 84 observaciones trimestrales que abarcan desde enero de 1960 hasta octubre de 1980. La variable mide las ganancias trimestrales por acción (en dólares) de la empresa Johnson & Johnson, obtenida de la obra de Shumway y Stoffer (Time Series Analysis and its Applications).
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("JohnsonJohnson")
+datos <- leer_serie(JohnsonJohnson, fuente, "dólares por acción")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(JohnsonJohnson), all(y == as.numeric(JohnsonJohnson)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("JohnsonJohnson", fuente, "dólares por acción", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 7")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Ganancias trimestrales de Johnson & Johnson")
+ggsave("figs/e7-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e7-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+Se observa una clara tendencia creciente en la serie, acompañada de un patrón que se vuelve cada vez más pronunciado a medida que transcurren los trimestres. Por su parte, aunque en el correlograma no se identifican picos prominentes en los múltiplos estacionales, se evidencia que casi todos los rezagos superan las bandas de significancia, lo que permite sospechar la presencia de autocorrelación y la falta de estacionariedad en la serie.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 21 rezagos en el correlograma, se evidencia que los 21 se encuentran por fuera de las bandas de significancia. Este resultado señala la presencia de autocorrelación en la serie y confirma la fuerte dependencia lineal que existe entre las observaciones a lo largo del tiempo.
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+Con un valor p inferior a cualquier nivel de significancia , se rechaza la hipótesis nula. Por lo tanto, existe evidencia estadística suficiente para sugerir la presencia de autocorrelación en la serie, confirmando lo observado tanto en el correlograma como en el contraste de los rezagos.
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en dos conjuntos: un periodo de entrenamiento compuesto por 72 observaciones para la estimación del modelo y un conjunto de validación de 12 observaciones para evaluar su desempeño en el pronóstico fuera de muestra.
+
+::: 
+
+## Método
+
+Tal como se evidenciaba en el gráfico preliminar, la serie presenta una clara tendencia con una aceleración que sugiere un comportamiento de tipo exponencial. Por lo tanto, se decidió utilizar un modelo de tendencia exponencial para capturar adecuadamente esta dinámica de crecimiento a lo largo del tiempo
+
+::: {.panel-tabset}
+
+### Medidas
+
+```{r}
+# 3. Ajuste (exponencial)
+ajuste <- ajustar_tendencia(y_est, "exponencial")
+p <- 2
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+Al revisar las medidas de precisión, se confirma que el modelo de tendencia exponencial es superior al pronóstico ingenuo, al presentar un mejor desempeño en todas las métricas evaluadas. El MSE obtiene un valor de 7.7384 frente a más del doble en el método ingenuo, lo que sugiere que el modelo comete errores de menor magnitud en promedio. Asimismo, la desviación absoluta (MAD) indica que el modelo se equivoca en promedio en 1.845 unidades, en comparación con las 4.215 unidades del ingenuo. En términos porcentuales (MAPE), las estimaciones se alejan en promedio un 16% de los valores reales, mientras que el pronóstico de referencia se aleja casi el doble. Por último, el valor del MASE resulta ser menor que 1 y significativamente inferior al del ingenuo, confirmando que la Tendencia Exponencial genera un pronóstico superior.
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e7-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e7-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+En la gráfica de los errores se evidencia que, aunque estos oscilan alrededor de cero, su variabilidad aumenta drásticamente con el paso del tiempo, registrando valores bastante alejados en los últimos trimestres de la muestra. Por su parte, el correlograma muestra picos muy sobresalientes que superan ampliamente las bandas de referencia. Por tanto, es posible concluir que los errores no se comportan como ruido blanco.
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Con un valor p de 0.835, no se rechaza la hipótesis nula, lo que indica que no hay evidencia suficiente para sugerir que existe un sesgo en los errores.
+
+**Ljung-Box:** Con un valor p menor a cualquier nivel de significancia , se rechaza la hipótesis nula; es decir, hay evidencia suficiente para sugerir la presencia de autocorrelación, lo cual tiene mucho sentido con lo observado en el correlograma.
+
+**Jarque-Bera:** Con un valor p menor a cualquier nivel de significancia , se rechaza la hipótesis nula, por lo que hay evidencia suficiente para sugerir que los errores no siguen una distribución normal.
+
+**Durbin-Watson:** Con un estadístico cercano a 2, se sugiere que no existe autocorrelación de primer orden en los residuos, algo que también se mostraba en el correlograma
+
+
+### Coeficientes y prueba t
+
+```{r}
+coef <- ajuste$parametros$tabla
+gl <- ajuste$parametros$n - nrow(coef)
+formatear_tabla(coef, "Coeficientes de Regresión Exponencial (sobre ln y)")
+
+for (j in 1:nrow(coef)) {
+  res <- list(estadistico = coef$t_robusto[j], valor_critico = qt(0.975, gl), valor_p = coef$p_robusto[j])
+  mostrar_prueba_html(paste("t sobre", rownames(coef)[j], "(error estándar robusto)"),
+                 paste(rownames(coef)[j], "= 0"), paste(rownames(coef)[j], "distinto de 0"),
+                 paste0("t con ", gl, " g.l."), res)
+}
+```
+
+La tasa de crecimiento estimada es de 0.04277, lo que equivale a un incremento continuo promedio en las ganancias por acción del 4.28% trimestral. Al evaluar las pruebas individuales t, en ambos casos se rechaza la hipótesis nula, confirmando que tanto el intercepto como la tasa de crecimiento son estadísticamente significativos.
+
+Al comparar los errores estándar ordinarios con los robustos, se observa una diferencia importante entre ambos, lo cual confirma nuevamente la existencia de autocorrelación en los residuos que se había probado en los análisis anteriores.
+
+:::
+
+### Gráfico Final
+
+```{r e7-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Ganancias Johnson & Johnson (exponencial)", ingenuo = pron_ing)
+ggsave("figs/e7-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+En la figura se observa cómo el modelo se ajusta de forma precisa a la serie, logrando capturar adecuadamente el patrón de crecimiento exponencial a lo largo del tiempo. En contraste, el pronóstico ingenuo resulta inadecuado, ya que al ignorar la dinámica de la serie proyecta una línea horizontal plana muy por debajo de los valores observados en la zona de validación. Sin embargo, en la proyección del método exponencial se evidencia que, aunque acompaña de cerca la tendencia ascendente de los datos, no logra captar el patrón estacional recurrente que presenta la serie.
+
+El modelo presenta un ajuste visual muy adecuado debido a que logra capturar con precisión la tendencia principal de crecimiento a largo plazo. Sin embargo, los errores no se comportan como ruido blanco porque el modelo de tendencia simple no incorpora la estructura estacional. Al ignorar estos patrones las desviaciones entre lo observado y lo estimado quedan autocorrelacionadas. 
+
+
+**Conclusión:** Se ajustó un modelo de Tendencia Exponencial identificando una tasa de crecimiento estimada del 4.28% trimestral ($\hat{\beta}_1 =0.04277$), evaluado con 72 datos de entrenamiento y 12 de validación. En comparación con el ingenuo, el modelo óptimo redujo el MSE a más de la mitad, es decir, 7.7384, la MAD de 4.215 a 1.845, el MAPE a 16% y logró un MASE menor a 1. Los diagnósticos mostraron ausencia de sesgo (p=0.835) y ausencia de autocorrelación de primer orden ($DW \approx 2$), pero rechazaron la normalidad (p<0.05 en Jarque-Bera) y la falta de autocorrelación conjunta (p<0.05 en Ljung-Box) debido a la variabilidad creciente de la serie. 
+
+**Recomendaciones:** Le sirve a inversionistas que quieren calcular cuánto dinero va a ganar una empresa exitosa a largo plazo entendiendo que las ganancias se multiplican con el tiempo. Se recomienda usarlo solo para periodos cortos de 1 a 4 trimestres si se busca precisión. Su gran limitante es que ignora por completo las subidas y bajadas típicas de cada época del año (como vender más en un trimestre que en otro), dejando un margen de error del 16%. 
+
+
+# Ejemplo 8: Holt Lineal
+
+La serie registra la población residente en Australia expresada en miles de personas, correspondiente al conjunto de datos `austres` en R. Cuenta con un total de 89 observaciones trimestrales (frecuencia 4), abarcando desde abril de 1971 hasta abril de 1993. Los datos provienen de la publicación de Brockwell y Davis (1996) sobre análisis de series de tiempo. 
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("austres")
+datos <- leer_serie(austres, fuente, "miles de residentes")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(austres), all(y == as.numeric(austres)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("austres", fuente, "miles de residentes", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Ejemplo 8")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Residentes de Australia (trimestral)")
+ggsave("figs/e8-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/e8-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+La serie exhibe una clara tendencia creciente con una trayectoria prácticamente rectilínea a lo largo del tiempo. Este comportamiento se confirma en el correlograma (ACF) mediante un decrecimiento lento hacia cero a medida que aumentan los rezagos. Asimismo, en la función de autocorrelación parcial (PACF), el primer rezago alcanza un valor cercano a 1, lo que señala la falta de estacionariedad en media de la serie. 
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 22 rezagos en el correlograma, se observa que la totalidad de ellos (22) se encuentran por fuera de las bandas de significancia. Este comportamiento refleja la presencia de una autocorrelación extremadamente fuerte en la serie, confirmando una elevada dependencia lineal entre las observaciones a lo largo de los trimestres evaluados.
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+El valor p es menor que cualquier nivel de significancia , por lo que se rechaza la hipótesis nula. Esto proporciona evidencia suficiente para sugerir la presencia de autocorrelación en la serie, confirmando lo observado tanto en el conteo de rezagos fuera de las bandas como en el comportamiento del correlograma.
+
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento de 77 observaciones trimestrales para la estimación del modelo y un conjunto de validación de 12 datos para evaluar la capacidad predictiva de las estimaciones.
+
+::: 
+
+## Método
+
+Para esta serie se seleccionó el método de Holt Lineal. Este enfoque permite actualizar dinámicamente tanto el nivel como la pendiente de la serie a medida que se incorporan nuevas observaciones, adaptándose de manera flexible a los cambios en la tendencia a lo largo del tiempo.
+
+::: {.panel-tabset}
+
+### Optimización
+
+```{r}
+# 3. Ajuste (holt)
+opt <- optimizar(y_est, "holt")
+formatear_tabla(cbind(opt$optimo, en_borde = opt$en_borde), "4. AJUSTE (holt) - Optimización")
+
+g_opt <- grafico_mse(opt, "MSE de un paso - Residentes de Australia")
+ggsave("figs/e8-optimizacion.png", g_opt, width = 7, height = 5)
+g_opt
+
+interpretar_borde(opt)
+
+ajuste <- ajustar_holt(y_est, opt$optimo$alpha, opt$optimo$beta)
+```
+
+La optimización del modelo arrojó un parámetro de nivel α=0.95, lo que indica que se otorga un peso predominante a las observaciones más recientes, dando una baja relevancia al historial pasado de la serie. Por su parte, el parámetro de tendencia $β=0.80$señala que la pendiente reacciona de manera rápida ante los cambios en la velocidad de crecimiento, lo que permite al modelo adaptar dinámicamente su inclinación a las fluctuaciones recientes de los datos. En el mapa de calor se observa que el error es alto solo en la esquina donde tanto alfa como beta son muy bajos (el recuadro oscuro), es decir, cuando el modelo reacciona muy poco tanto al nivel como a la tendencia; en el resto de la rejilla el error cae con fuerza y se mantiene bajo, con la combinación elegida ubicada justo en esa zona de menor error. Cabe señalar que $α=0.95$ corresponde al límite superior del rango evaluado, lo cual equivale casi al pronóstico ingenuo y es una señal de que la serie no es estacionaria en media, es decir, tiene una tendencia marcada que el modelo necesita seguir de cerca para pronosticar bien. 
+
+### Medidas
+
+```{r}
+p <- 2
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+Al comparar las medidas de precisión entre ambos métodos, queda muy claro que el modelo de Holt Lineal presenta un desempeño muy superior al pronóstico ingenuo. El MSE registra un valor de 8207 frente a 133004.8 del ingenuo, lo que muestra que en promedio se cometen menos errores. De igual manera, la desviación absoluta (MAD) indica que el modelo se equivoca en promedio en solo 78 unidades, mientras que el pronóstico de referencia supera más del doble este margen. En términos porcentuales (MAPE), las estimaciones se alejan tan solo un 0.4% de los valores reales, frente a un 1.8% del método ingenuo. Por último, el resultado del MASE confirma que el modelo de Holt Lineal proporciona una precisión de pronóstico significativamente mejor.
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/e8-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/e8-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+En la gráfica de los errores se observa cómo estos oscilan alrededor de cero, aunque se aprecian algunos puntos relativamente alejados. En general, no se identifican patrones o tendencias evidentes en su comportamiento a lo largo del tiempo. Por su parte, el correlograma muestra que la mayoría de los rezagos se encuentran dentro de las bandas de significancia, si bien existen dos rezagos que sobresalen ligeramente por fuera de los límites, lo cual podría sugerir la presencia de cierta autocorrelación en los residuos.
+
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Con un valor p de 0.415, no se rechaza la hipótesis nula, lo que indica que no hay evidencia suficiente para sugerir la existencia de un sesgo en los errores, aspecto que se confirma en el análisis gráfico.
+
+**Ljung-Box:** Con un valor p de 0.0006, se rechaza la hipótesis nula, por lo que hay evidencia suficiente para sugerir la presencia de autocorrelación en los residuos, algo que concuerda con lo observado en el correlograma.
+
+**Jarque-Bera:** Con un valor p menor a cualquier nivel de significancia , se rechaza la hipótesis nula, lo que indica que existe evidencia suficiente para sugerir que los errores no siguen una distribución normal.
+
+**Durbin-Watson:** Con un estadístico de 1.472, el cual se aproxima a 2, se puede sospechar que no existe una autocorrelación de primer orden severa en los residuos.
+
+
+::: 
+
+### Gráfico Final
+
+```{r e8-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Residentes de Australia (trimestral) (holt)", ingenuo = pron_ing)
+ggsave("figs/e8-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+En la figura se evidencia que el método de Holt Lineal logra captar correctamente el patrón general de la serie; además, demuestra su capacidad para adaptarse al cambio en la aceleración que se presenta en los últimos periodos. Esta flexibilidad permite que las proyecciones se acerquen de manera notable a la serie observada en la zona de validación. Por el contrario, el pronóstico ingenuo ofrece un rendimiento muy deficiente al ignorar la dinámica y las tendencias de la serie, proyectando una trayectoria plana incapaz de responder a los cambios observados en los datos.
+
+Al comparar el desempeño obtenido en esta serie frente al modelo de tendencia lineal aplicado en la Serie 5, se evidencia que el método de Holt Lineal logra captar de forma significativamente superior el comportamiento de los datos. Esto se debe a su capacidad para adaptar dinámicamente tanto el nivel como la pendiente ante cambios en la velocidad de crecimiento, lo que permite generar proyecciones mucho más cercanas a los valores observados en el periodo de validación. En contraste, el modelo de tendencia lineal proyecta un ritmo de variación rígido y constante, lo que limita su capacidad de respuesta frente a desaceleraciones o cambios en la trayectoria de la serie.
+
+**Conclusión:** Se ajustó un modelo de Holt Lineal con parámetros optimizados de nivel $\alpha=0.95$ y tendencia $\alpha=0.80$, sobre 77 trimestres de entrenamiento y 12 de validación. Frente al método ingenuo, que registró un MSE de 133 004.8 y un MAPE del 1.8%, el modelo de Holt Lineal mejoró sustancialmente las métricas reduciendo el MSE a 8207, la MAD a 78 unidades, el MAPE al 0.4% y obteniendo un MASE significativamente inferior a 1. La validación de errores mostró un ajuste sin sesgo (p=0.415) y sin autocorrelación severa de primer orden (DW=1.472), aunque se rechazó la normalidad (p<0.05 en Jarque-Bera) y la autocorrelación conjunta (p=0.0006 en Ljung-Box). 
+
+**Recomendaciones:** Les sirve a analistas de demografía o salud pública que necesitan predecir la población futura con un método flexible que se acomode si el ritmo de crecimiento se acelera o se frena. Es muy confiable para usarse en un horizonte de 1 a 12 trimestres (3 años). Su límite es que, como le da un peso del 0.95 al dato más reciente, le da demasiada importancia a los cambios del último momento, manteniendo una diferencia promedio de 78 mil habitantes. 
+
+
+# Contraejemplo: Holt Lineal sobre Serie Estacionaria
+
+Para este análisis se empleó la serie `lynx`, la cual registra el número de linces atrapados en el área del río Mackenzie en Canadá (114 observaciones anuales, recopiladas entre 1821 y 1934; Brockwell & Davis, 1991)
+
+```{r}
+# 1. Descripción
+fuente <- fuente_help("lynx")
+datos <- leer_serie(lynx, fuente, "número de linces cazados")
+n <- nrow(datos)
+y <- datos$y
+
+stopifnot(n == length(lynx), all(y == as.numeric(lynx)))
+
+df_desc <- data.frame(
+  Propiedad = c("Nombre en R", "Fuente", "Unidad", "Frecuencia", "Rango Fechas", "Observaciones"),
+  Detalle = c("lynx", fuente, "número de linces cazados", 
+              attr(datos, "frecuencia"), 
+              paste(format(min(datos$fecha)), "a", format(max(datos$fecha))), 
+              as.character(n))
+)
+formatear_tabla(df_desc, "1. DESCRIPCIÓN - Contraejemplo")
+```
+
+## Patrón de la Serie
+
+::: {.panel-tabset}
+
+### Gráficos
+
+```{r}
+# 2. Patrón de la Serie
+g_serie <- graficar_serie(datos, "Linces cazados por año en Canadá")
+ggsave("figs/contra-serie.png", g_serie, width = 8, height = 4.5)
+g_serie
+
+g_corr <- correlograma(datos)
+ggsave("figs/contra-correlograma.png", g_corr, width = 8, height = 6)
+g_corr
+```
+
+En la gráfica de la serie se observa un comportamiento estacional pronunciado, en el que se repiten patrones claros a lo largo del tiempo. Esta estructura se refleja de manera evidente en el correlograma, donde se aprecian rezagos significativos que se repiten en múltiplos de manera periódica. Asimismo, la serie oscila sin mostrar un cambio de nivel o una dirección sostenida a largo plazo, lo que sugiere un comportamiento de naturaleza estacionaria.
+
+### Contraste
+
+```{r}
+m <- min(floor(n / 4), 24)
+r <- acf_manual(y, m)
+limite <- qnorm(0.975) / sqrt(n)
+
+contraste <- data.frame(rezago = 1:m, rh = r, z = r * sqrt(n), fuera_de_banda = abs(r) > limite)
+
+formatear_tabla(data.frame(banda = limite, r1 = r[1], rezagos_fuera = sum(contraste$fuera_de_banda), esperados_por_azar = 0.05 * m), "Resumen del Contraste")
+formatear_tabla(contraste[contraste$fuera_de_banda, ], "Rezagos Fuera de Banda")
+```
+
+Al evaluar los primeros 24 rezagos, se observa que 20 de ellos sobrepasan las bandas de significancia. Este resultado sugiere una clara presencia de autocorrelación en la serie, lo cual resulta completamente coherente con la estructura y los patrones identificados en los análisis gráficos previos. 
+
+### Ljung Box
+
+```{r}
+lb_serie <- ljung_box(r, n, m, 0)
+mostrar_prueba_html("Ljung-Box sobre la serie (p = 0)",
+               "todas las autocorrelaciones hasta m son cero", "alguna es distinta de cero",
+               paste0("chi2 con ", lb_serie$gl, " g.l."), lb_serie)
+
+verificar_ljung_box(y, m)
+```
+
+Con un valor p menor que cualquier $\alpha$ se rechaza $H_0$, es decir, hay autocorrelación, lo que confirma todo lo anterior
+
+### Partición
+
+```{r}
+h <- min(12, floor(0.2 * n))
+n_est <- n - h
+y_est <- y[1:n_est]
+y_val <- y[(n_est + 1):n]
+
+formatear_tabla(data.frame(h = h, estimacion = n_est, validacion = h), "Partición de la Serie")
+```
+
+La serie se dividió en un conjunto de entrenamiento de 102 observaciones para la estimación de los parámetros del modelo, reservando las 12 observaciones restantes como muestra de validación para evaluar la capacidad de pronóstico fuera de muestra.
+
+::: 
+
+## Método
+
+Al tratarse de una serie estacional y estacionaria, se evaluará el comportamiento del método de Holt Lineal. El propósito es analizar cómo responde un modelo diseñado específicamente para capturar y proyectar componentes de nivel y tendencia cuando se aplica a una serie que no presenta una dirección o incremento constante en el tiempo.
+
+::: {.panel-tabset}
+
+### Optimización
+
+```{r}
+# 3. Ajuste (holt)
+opt <- optimizar(y_est, "holt")
+formatear_tabla(cbind(opt$optimo, en_borde = opt$en_borde), "4. AJUSTE (holt) - Optimización")
+
+g_opt <- grafico_mse(opt, "MSE de un paso - Linces cazados por año en Canadá")
+ggsave("figs/contra-optimizacion.png", g_opt, width = 7, height = 5)
+g_opt
+
+interpretar_borde(opt)
+
+ajuste <- ajustar_holt(y_est, opt$optimo$alpha, opt$optimo$beta)
+```
+
+La optimización de los parámetros del modelo arrojó un valor de $α=0.95$, lo que significa que el suavizado del nivel le otorga un peso predominante a las observaciones más recientes, restando relevancia a la historia pasada de la serie. Por su parte, el parámetro de tendencia se ubicó en $β=0.05$, lo que indica que el modelo no reacciona con rapidez a las variaciones en la pendiente; en consecuencia, podrá presentar dificultades para adaptarse a aceleraciones o desaceleraciones marcadas en el ritmo de cambio. En el mapa de calor se observa que el error más alto (la zona oscura) se concentra cuando beta es alto, sin importar mucho el valor de alfa, mientras que el punto elegido, marcado con la X, queda en la esquina opuesta, donde el error es el más bajo de toda la rejilla.
+
+Sin embargo, tanto alfa como beta cayeron en los bordes del rango evaluado, y aquí eso no debe leerse como evidencia de una tendencia real: `lynx` es una serie estacionaria en media, con estacionalidad. Que Holt necesite un alfa tan alto para minimizar el error muestra justamente que el método está mal aplicado a esta serie: como no existe una tendencia que seguir, el modelo termina pegándose casi al último dato para intentar reaccionar a los saltos, en vez de capturar un patrón real. El beta tan bajo, por su parte, indica que la pendiente casi no se actualiza, lo que refuerza la idea de que el modelo no encuentra ninguna tendencia estable que ajustar. 
+
+### Medidas
+
+```{r}
+p <- 2
+
+pron <- ajuste$pronosticar(h)
+pron_ing <- ingenuo(y_est, h)
+
+tabla <- rbind(
+  data.frame(caso = "Método, un paso (estimación)", medidas(y_est, ajuste$yhat, y_est)),
+  data.frame(caso = "Método, h pasos (validación)", medidas(y_val, pron, y_est)),
+  data.frame(caso = "Ingenuo, h pasos (validación)", medidas(y_val, pron_ing, y_est)))
+formatear_tabla(tabla, "Medidas y Comparación")
+```
+
+Al analizar las métricas de precisión fuera de muestra, se hace evidente que el pronóstico ingenuo presenta un mejor desempeño en comparación con el modelo de Holt Lineal, al registrar valores de error consistentemente menores. En particular, el error cuadrático medio (MSE) del Holt Lineal alcanza un valor de 4627757 frente a 3202589 del modelo ingenuo, lo que confirma que este último comete errores de menor magnitud en promedio. Asimismo, en términos absolutos (MAE), el pronóstico ingenuo se desvía en promedio 1428 unidades respecto a los valores reales, mientras que el Holt Lineal registra una desviación superior de 1848 unidades. Esta diferencia se mantiene en la escala porcentual (MAPE), donde el Holt Lineal se aleja un 102.2% de las observaciones reales frente al 65.66% del método ingenuo. Finalmente, la métrica MASE ratifica que el pronóstico ingenuo supera en rendimiento al modelo Holt Lineal en esta serie
+
+### Validación Errores
+
+```{r}
+# 4. Errores de un paso
+errores <- y_est - ajuste$yhat
+ve <- validar_errores(errores, p = p, fechas = datos$fecha[1:n_est])
+
+ggsave("figs/contra-errores.png", ve$grafico_errores, width = 8, height = 3.5)
+ggsave("figs/contra-correlograma-errores.png", ve$correlograma, width = 8, height = 6)
+
+ve$grafico_errores
+ve$correlograma
+```
+
+En la inspección gráfica de los residuos se evidencia que estos continúan exhibiendo un patrón estructurado, lo que indica que el modelo no logró extraer toda la información de la serie. Esto se confirma en el correlograma, donde se observan varios rezagos que sobrepasan las bandas de significancia, destacándose además la presencia de rezagos prominentes en intervalos múltiplos
+
+
+### Pruebas
+
+```{r}
+mostrar_prueba_html("t de media cero", "E[e] = 0", "E[e] distinto de 0", paste0("t con ", ve$prueba_t$gl, " g.l."), ve$prueba_t)
+
+mostrar_prueba_html("Ljung-Box sobre los errores", "no hay autocorrelación hasta m", "hay autocorrelación", paste0("chi2 con ", ve$ljung_box$gl, " g.l. (m - p)"), ve$ljung_box)
+
+mostrar_prueba_html("Jarque-Bera", "los errores son normales", "los errores no son normales", "chi2 con 2 g.l. (asintótica)", ve$jarque_bera, nota = if (ve$n < 20) paste("solo hay", ve$n, "errores (< 20): la decisión es poco fiable"))
+
+mostrar_prueba_html("Durbin-Watson", "no hay autocorrelación de primer orden", "hay autocorrelación de primer orden", "d entre 0 y 4", ve$durbin_watson)
+```
+
+**t de media cero:** Con un valor p de 0.918, no se rechaza la hipótesis nula, por lo que no hay evidencia suficiente para sugerir la existencia de un sesgo en los errores.
+
+**Ljung-Box:** Con un valor p menor que cualquier nivel de significancia , se rechaza la hipótesis nula, lo que indica que hay evidencia suficiente para sugerir que existe autocorrelación, lo cual se confirmaba en el correlograma.
+
+**Jarque-Bera:** Con un valor p de 0.0138, se rechaza la hipótesis nula, de modo que existe evidencia suficiente para sugerir que los errores no son normales.
+
+**Durbin-Watson:** Con un estadístico de 1.2192 cercano a 2, se puede sospechar que no hay autocorrelación de primer orden.
+
+
+:::
+
+### Gráfico Final
+
+```{r contra-codigo}
+g_final <- grafico_pronostico(datos, n_est, ajuste$yhat, pron, "Linces cazados por año en Canadá (holt)", ingenuo = pron_ing)
+ggsave("figs/contra-final.png", g_final, width = 8, height = 4.5)
+g_final
+```
+
+
+En la representación gráfica de las proyecciones se evidencia la limitación estructural del modelo. El método de Holt Lineal está diseñado exclusivamente para capturar y proyectar series con tendencia, pero carece de los mecanismos necesarios para modelar series con componentes estacionales. En consecuencia, la trayectoria pronosticada no logra seguir los giros ni la periodicidad característica de los datos reales, sobreestimando o subestimando. 
+
+Al final del periodo de entrenamiento (justo antes de la zona sombreada), la serie venía cayendo. Por eso, el modelo de Holt asume de forma rígida que esa caída continuará y proyecta una pendiente negativa hacia abajo (línea roja), perdiendo totalmente la curva de recuperación que hace la serie real. En cambio, el pronóstico ingenuo (línea punteada), aunque simplista, se mantiene plano cerca del valle y termina cometiendo un error mucho menor que la línea descendente de Holt.
